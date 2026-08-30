@@ -31,6 +31,7 @@ class DBService {
       minimum_stock INTEGER,
       supplier TEXT,
       expiry_date TEXT
+      barcode TEXT UNIQUE,
     )''');
 
     await db.execute('''
