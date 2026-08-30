@@ -9,22 +9,27 @@ class StockTakeScreen extends StatefulWidget {
 }
 
 class _StockTakeScreenState extends State<StockTakeScreen> {
-  List<Map> products = [];
-  Map<int, int> counted = {};
+  List<Map<String, dynamic>> products = [];
+  Map<int, TextEditingController> controllers = {};
 
   void _loadProducts() async {
     final db = await DBService.instance.database;
     final data = await db.query('products');
-    setState(() => products = data);
+    setState(() {
+      products = data;
+      for(var p in products){
+        controllers[p['id']] = TextEditingController(text: p['quantity'].toString());
+      }
+    });
   }
 
   void _approveAdjustments() async {
     final db = await DBService.instance.database;
     final now = DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now());
     for (var p in products) {
-      int countedQty = counted[p['id']]?? p['quantity'];
+      int countedQty = int.tryParse(controllers[p['id']]!.text) ?? p['quantity'];
       int diff = countedQty - p['quantity'];
-      if (diff!= 0) {
+      if (diff != 0) {
         await db.update('products', {'quantity': countedQty}, where: 'id =?', whereArgs: [p['id']]);
         await db.insert('stock_movements', {
           'product_id': p['id'], 'type': 'ADJUSTMENT', 'quantity': diff,
@@ -32,7 +37,8 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
         });
       }
     }
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Stock Adjusted")));
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Stock Adjusted & Saved")));
+    _loadProducts();
   }
 
   @override
@@ -45,24 +51,28 @@ class _StockTakeScreenState extends State<StockTakeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("STOCK TAKE")),
-      floatingActionButton: FloatingActionButton(onPressed: _approveAdjustments, child: const Icon(Icons.check)),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _approveAdjustments, 
+        label: const Text("APPROVE"),
+        icon: const Icon(Icons.check)
+      ),
       body: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: DataTable(columns: const [
           DataColumn(label: Text("PRODUCT")),
           DataColumn(label: Text("EXPECTED")),
           DataColumn(label: Text("COUNTED")),
-          DataColumn(label: Text("DIFFERENCE")),
-        ], rows: products.map((p) => DataRow(cells: [
-          DataCell(Text(p['name'])),
-          DataCell(Text(p['quantity'].toString())),
-          DataCell(SizedBox(width: 80, child: TextField(
-            keyboardType: TextInputType.number,
-            onChanged: (v) => counted[p['id']] = int.tryParse(v)?? 0,
-            decoration: InputDecoration(hintText: p['quantity'].toString())
-          ))),
-          DataCell(Text(((counted[p['id']]?? p['quantity']) - p['quantity']).toString())),
-        ])).toList()),
+          DataColumn(label: Text("DIFF")),
+        ], rows: products.map((p) {
+          int counted = int.tryParse(controllers[p['id']]!.text) ?? p['quantity'];
+          int diff = counted - p['quantity'];
+          return DataRow(cells: [
+            DataCell(Text(p['name'])),
+            DataCell(Text(p['quantity'].toString())),
+            DataCell(SizedBox(width: 80, child: TextField(controller: controllers[p['id']], keyboardType: TextInputType.number))),
+            DataCell(Text(diff.toString(), style: TextStyle(color: diff != 0 ? Colors.red : Colors.green))),
+          ]);
+        }).toList()),
       ),
     );
   }
