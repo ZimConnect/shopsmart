@@ -81,6 +81,24 @@ class DBService {
       pin TEXT,
       role TEXT
     )''');
+
+    await db.execute('''
+CREATE TABLE settings (
+  id INTEGER PRIMARY KEY,
+  business_name TEXT,
+  address TEXT,
+  phone TEXT,
+  vat_rate REAL DEFAULT 15.5,
+  ecocash_till TEXT
+)''');
+
+// Insert default Zim business
+await db.insert('settings', {
+  'business_name': 'ShopSmart Tuckshop',
+  'address': 'Harare, Zimbabwe',
+  'phone': '0772 123 456',
+  'ecocash_till': '123456'
+});
     
     // Seed admin user: PIN 1234
     await db.insert('users', {'name': 'Admin', 'pin': '1234', 'role': 'Owner'});
