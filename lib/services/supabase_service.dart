@@ -1,0 +1,5 @@
+import 'package:supabase_flutter/supabase_flutter.dart'; import 'package:shopsmart_zw/services/db_service.dart'; import 'package:shopsmart_zw/services/auth_service.dart';
+class SupabaseService { static final supabase = Supabase.instance.client; static bool _initialized = false;
+static Future<void> init() async { if(_initialized) return; await Supabase.initialize(url: 'https://YOUR-PROJECT.supabase.co', anonKey: 'YOUR-ANON-KEY'); _initialized = true; }
+static Future<void> backupSales() async { final db = await DBService.instance.database; final sales = await db.query('sales'); final items = await db.query('sale_items'); final customers = await db.query('customers'); final products = await db.query('products');
+  await supabase.from('sales').upsert(sales.map((e) => {...e, 'shop_id': AuthService.shopId}).toList()); await supabase.from('sale_items').upsert(items); await supabase.from('customers').upsert(customers.map((e) => {...e, 'shop_id': AuthService.shopId}).toList()); await supabase.from('products').upsert(products.map((e) => {...e, 'shop_id': AuthService.shopId}).toList()); }}
