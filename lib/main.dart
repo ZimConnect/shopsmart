@@ -1,22 +1,3 @@
-import 'package:flutter/material.dart';
-import 'package:shopsmart_zw/services/db_service.dart';
-import 'package:shopsmart_zw/screens/login_screen.dart';
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await DBService.instance.database;
-  runApp(const ShopSmartApp());
-}
-
-class ShopSmartApp extends StatelessWidget {
-  const ShopSmartApp({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'ShopSmart ZW',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(primarySwatch: Colors.green, useMaterial3: true),
-      home: const LoginScreen(), // Start with PIN
-    );
-  }
-}
+import 'package:flutter/material.dart'; import 'package:shopsmart_zw/services/db_service.dart'; import 'package:shopsmart_zw/services/supabase_service.dart'; import 'package:shopsmart_zw/screens/login_screen.dart';
+void main() async { WidgetsFlutterBinding.ensureInitialized(); await DBService.instance.database; await SupabaseService.init(); runApp(const ShopSmartApp()); }
+class ShopSmartApp extends StatelessWidget { const ShopSmartApp({super.key}); @override Widget build(BuildContext context) { return MaterialApp(title: 'ShopSmart ZW', debugShowCheckedModeBanner: false, theme: ThemeData(primarySwatch: Colors.green, useMaterial3: true), home: const LoginScreen());}
