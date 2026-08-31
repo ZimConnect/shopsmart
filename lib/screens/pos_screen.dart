@@ -1,142 +1,31 @@
-import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart'; // NEW
-import 'package:shopsmart_zw/services/db_service.dart';
-import 'package:shopsmart_zw/services/receipt_service.dart';
-import 'package:intl/intl.dart';
-
-class POSScreen extends StatefulWidget {
-  const POSScreen({super.key});
-  @override
-  State<POSScreen> createState() => _POSScreenState();
+import 'package:flutter/material.dart'; import 'package:mobile_scanner/mobile_scanner.dart'; import 'package:shopsmart_zw/services/db_service.dart'; import 'package:shopsmart_zw/services/receipt_service.dart'; import 'package:shopsmart_zw/services/auth_service.dart'; import 'package:shopsmart_zw/services/sms_service.dart'; import 'package:shopsmart_zw/services/ecocash_service.dart'; import 'package:intl/intl.dart';
+class POSScreen extends StatefulWidget { const POSScreen({super.key}); @override State<POSScreen> createState() => _POSScreenState(); }
+class _POSScreenState extends State<POSScreen> { List<Map<String, dynamic>> products = []; List<Map<String, dynamic>> cart = []; String paymentMethod = "CASH"; final amountController = TextEditingController(); final receiptService = ReceiptService(); bool _showScanner = false; Map<String, dynamic> settings = {}; Map<String, dynamic>? selectedCustomer; final phoneController = TextEditingController(); bool _processingPayment = false;
+void _loadData() async { final db = await DBService.instance.database; final p = await db.query('products', where: 'shop_id =?', whereArgs: [AuthService.shopId]); final s = await db.query('settings', limit: 1); setState(() { products = p; settings = s.first; });}
+void _addToCart(Map<String, dynamic> product) { setState(() { var existing = cart.indexWhere((item) => item['id'] == product['id']); if (existing >= 0) { cart[existing]['qty'] += 1; } else { cart.add({...product, 'qty': 1}); }});}
+void _onBarcodeDetected(BarcodeCapture capture) async { final db = await DBService.instance.database; final barcode = capture.barcodes.first.rawValue; if (barcode == null) return; final res = await db.query('products', where: 'barcode =? AND shop_id =?', whereArgs: [barcode, AuthService.shopId]); if (res.isNotEmpty) { _addToCart(res.first); setState(() => _showScanner = false); } else { if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product not found"))); }}
+void _findCustomer() async { final db = await DBService.instance.database; final res = await db.query('customers', where: 'phone =? AND shop_id =?', whereArgs: [phoneController.text, AuthService.shopId]); if(res.isNotEmpty){ setState(() => selectedCustomer = res.first); } else { int id = await db.insert('customers', {'shop_id': AuthService.shopId, 'phone': phoneController.text, 'name': 'Walk-in'}); setState(() => selectedCustomer = {'id': id, 'phone': phoneController.text, 'name': 'Walk-in', 'loyalty_points': 0});}}
+double get subtotal => cart.fold(0, (sum, item) => sum + (item['qty'] * item['selling_price'])); double get vat => subtotal * (settings['vat_rate']?? 15.5) / 100; double get total => subtotal + vat;
+Future<void> _checkout() async { if (cart.isEmpty || _processingPayment) return; setState(() => _processingPayment = true); final db = await DBService.instance.database; final now = DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()); final receiptNum = "SS${DateFormat('yyMMddHHmmss').format(DateTime.now())}"; double tendered = double.tryParse(amountController.text)?? total; double change = tendered - total; double points = total * 0.01; String paymentRef = "";
+  if(paymentMethod == "ECOCASH" && selectedCustomer!= null){ try{ final res = await EcoCashService.requestPayment(selectedCustomer!['phone'], total, receiptNum); paymentRef = res['transactionId']; }catch(e){ setState(() => _processingPayment = false); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("EcoCash Failed: $e"))); return; }}
+  int saleId = await db.insert('sales', {'shop_id': AuthService.shopId, 'receipt_number': receiptNum, 'cashier': AuthService.name, 'customer_id': selectedCustomer?['id'], 'subtotal': subtotal, 'discount': 0, 'vat': vat, 'total': total, 'payment_method': paymentMethod, 'payment_ref': paymentRef, 'amount_tendered': tendered, 'change': change, 'date': now});
+  for (var item in cart) { await db.insert('sale_items', {'sale_id': saleId, 'product_id': item['id'], 'quantity': item['qty'], 'selling_price': item['selling_price'], 'cost_price': item['cost_price'], 'subtotal': item['qty'] * item['selling_price']}); int newQty = item['quantity'] - item['qty']; await db.update('products', {'quantity': newQty}, where: 'id =?', whereArgs: [item['id']]); await db.insert('stock_movements', {'shop_id': AuthService.shopId, 'product_id': item['id'], 'type': 'SALE', 'quantity': -item['qty'], 'reason': 'Sale $receiptNum', 'user': AuthService.name, 'date': now});}
+  if(selectedCustomer!= null){ await db.rawUpdate("UPDATE customers SET loyalty_points = loyalty_points +?, total_spent = total_spent +? WHERE id =?", [points, total, selectedCustomer!['id']]); await SMSService.sendPointsNotification(selectedCustomer!['phone'], selectedCustomer!['name'], points);}
+  await receiptService.printReceipt({'receipt_number': receiptNum, 'cashier': AuthService.name, 'customer': selectedCustomer?['name'], 'items': cart, 'subtotal': subtotal, 'vat': vat, 'total': total, 'payment_method': paymentMethod, 'payment_ref': paymentRef, 'amount_tendered': tendered, 'change': change, 'points': points, 'address': settings['address'], 'phone': settings['phone'], 'ecocash_till': settings['ecocash_till']});
+  setState(() { cart.clear(); selectedCustomer = null; phoneController.clear(); _processingPayment = false; }); amountController.clear(); _loadData(); if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Sale $receiptNum Complete")));
 }
-
-class _POSScreenState extends State<POSScreen> {
-  List<Map<String, dynamic>> products = [];
-  List<Map<String, dynamic>> cart = [];
-  String paymentMethod = "CASH";
-  final amountController = TextEditingController();
-  final receiptService = ReceiptService();
-  bool _showScanner = false;
-
-  void _loadProducts() async {
-    final db = await DBService.instance.database;
-    final data = await db.query('products');
-    setState(() => products = data);
-  }
-
-  void _addToCart(Map<String, dynamic> product) {
-    setState(() {
-      var existing = cart.indexWhere((item) => item['id'] == product['id']);
-      if (existing >= 0) {
-        cart[existing]['qty'] += 1;
-      } else {
-        cart.add({...product, 'qty': 1});
-      }
-    });
-  }
-
-  void _scanBarcode() async {
-    setState(() => _showScanner = true);
-  }
-
-  void _onBarcodeDetected(BarcodeCapture capture) async {
-    final db = await DBService.instance.database;
-    final barcode = capture.barcodes.first.rawValue;
-    if (barcode == null) return;
-
-    final res = await db.query('products', where: 'barcode =?', whereArgs: [barcode]);
-    if (res.isNotEmpty) {
-      _addToCart(res.first);
-      setState(() => _showScanner = false);
-    } else {
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Product not found")));
-    }
-  }
-
-  double get subtotal => cart.fold(0, (sum, item) => sum + (item['qty'] * item['selling_price']));
-  double get vat => subtotal * 0.155;
-  double get total => subtotal + vat;
-
-  Future<void> _checkout() async {
-    //... same checkout code as before...
-    // Just make sure to pass tillNumber to receipt
-    final db = await DBService.instance.database;
-    final settings = await db.query('settings', limit: 1);
-    String till = settings.isNotEmpty? settings.first['ecocash_till'] as String : "N/A";
-
-    //... rest of checkout...
-    await receiptService.printReceipt({
-      //... other fields
-      'ecocash_till': till,
-    });
-    _loadProducts();
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _loadProducts();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_showScanner) {
-      return Scaffold(
-        appBar: AppBar(title: const Text("Scan Barcode"), leading: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() => _showScanner = false))),
-        body: MobileScanner(onDetect: _onBarcodeDetected),
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('POS - SALE'),
-        actions: [
-          IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: _scanBarcode) // SCAN BUTTON
-        ],
-      ),
-      body: Row(
-        children: [
-          Expanded(
-            flex: 3,
-            child: GridView.builder(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4),
-              itemCount: products.length,
-              itemBuilder: (_, i) {
-                final p = products[i];
-                return Card(child: InkWell(
-                  onTap: () => _addToCart(p),
-                  child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Text(p['name'], textAlign: TextAlign.center),
-                    Text("\$${p['selling_price']}", style: const TextStyle(fontWeight: FontWeight.bold)),
-                    Text("Qty: ${p['quantity']}", style: const TextStyle(fontSize: 12, color: Colors.grey))
-                  ])),
-                ));
-              },
-            ),
-          ),
-          Expanded(
-            flex: 2,
-            child: Column(children: [
-              const Text('CURRENT SALE', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              Expanded(child: ListView(children: cart.map((item) => ListTile(
-                title: Text(item['name']),
-                subtitle: Text("${item['qty']} x \$${item['selling_price']}"),
-                trailing: Text("\$${(item['qty'] * item['selling_price']).toStringAsFixed(2)}"),
-              )).toList())),
-              Text('TOTAL: \$${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-              TextField(controller: amountController, decoration: const InputDecoration(labelText: "Amount Tendered \$"), keyboardType: TextInputType.number),
-              Row(children: [_payBtn("CASH"), _payBtn("ECOCASH"), _payBtn("CARD")]),
-              ElevatedButton(onPressed: _checkout, child: const Text("COMPLETE SALE & PRINT"))
-            ]),
-          )
-        ],
-      ),
-    );
-  }
-
-  Widget _payBtn(String method) => Expanded(child: ElevatedButton(
-    style: ElevatedButton.styleFrom(backgroundColor: paymentMethod == method? Colors.green : null),
-    onPressed: () => setState(() => paymentMethod = method),
-    child: Text(method)
-  ));
-}
+@override void initState() { super.initState(); _loadData(); }
+@override Widget build(BuildContext context) {
+  if (_showScanner) { return Scaffold(appBar: AppBar(title: const Text("Scan Barcode"), leading: IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() => _showScanner = false))), body: MobileScanner(onDetect: _onBarcodeDetected));}
+  return Scaffold(appBar: AppBar(title: const Text('POS - SALE'), actions: [IconButton(icon: const Icon(Icons.qr_code_scanner), onPressed: () => setState(() => _showScanner = true))]), body: Row(children: [
+    Expanded(flex: 3, child: GridView.builder(gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4), itemCount: products.length, itemBuilder: (_, i) { final p = products[i]; return Card(child: InkWell(onTap: () => _addToCart(p), child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Text(p['name'], textAlign: TextAlign.center), Text("\$${p['selling_price']}", style: const TextStyle(fontWeight: FontWeight.bold)), Text("Qty: ${p['quantity']}", style: const TextStyle(fontSize: 12))]))));})),
+    Expanded(flex: 2, child: Column(children: [
+      Row(children: [Expanded(child: TextField(controller: phoneController, decoration: const InputDecoration(labelText: "Customer Phone", prefixText: "+263"), keyboardType: TextInputType.phone)), IconButton(icon: const Icon(Icons.search), onPressed: _findCustomer)]),
+      if(selectedCustomer!= null) Text("Customer: ${selectedCustomer!['name']} | Points: ${selectedCustomer!['loyalty_points']}"),
+      const Text('CURRENT SALE', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), Expanded(child: ListView(children: cart.map((item) => ListTile(title: Text(item['name']), subtitle: Text("${item['qty']} x \$${item['selling_price']}"), trailing: Text("\$${(item['qty'] * item['selling_price']).toStringAsFixed(2)}"))).toList())),
+      Text('SUBTOTAL: \$${subtotal.toStringAsFixed(2)}'), Text('VAT: \$${vat.toStringAsFixed(2)}'), Text('TOTAL: \$${total.toStringAsFixed(2)}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+      TextField(controller: amountController, decoration: const InputDecoration(labelText: "Amount Tendered \$"), keyboardType: TextInputType.number),
+      Row(children: [_payBtn("CASH"), _payBtn("ECOCASH"), _payBtn("CARD")]), _processingPayment? const CircularProgressIndicator() : ElevatedButton(onPressed: _checkout, child: const Text("COMPLETE SALE & PRINT"))
+    ]))
+  ])); }
+Widget _payBtn(String method) => Expanded(child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: paymentMethod == method? Colors.green : null), onPressed: () => setState(() => paymentMethod = method), child: Text(method)));}
